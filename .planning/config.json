@@ -1,0 +1,20 @@
+{
+  "project_name": "AnalyzerDiagnosis",
+  "milestone": "stabilize-and-improve-strategy-finder",
+  "mode": "interactive",
+  "research_enabled": true,
+  "research_focus": "polymarket-api-slug-schema-resilience",
+  "type": "brownfield",
+  "stack": {
+    "language": "python",
+    "python_version": "3.13+",
+    "framework": "flask",
+    "frontend": "inline-html-tailwind-cdn",
+    "persistence": "sqlite + json"
+  },
+  "constraints": {
+    "tests_required": true,
+    "ci_required": false,
+    "single_user": true
+  }
+}

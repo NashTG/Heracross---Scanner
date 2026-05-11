@@ -1,0 +1,79 @@
+
+================================================================================
+STEP B - Querying all markets per asset x timeframe combo
+================================================================================
+
+  [BTC x 5m] fetching... OK oldest: 2025-05-02  (46170 markets found)
+
+  [BTC x 15m] fetching... OK oldest: 2025-05-02  (46163 markets found)
+
+  [BTC x 1h] fetching... OK oldest: 2025-05-02  (46150 markets found)
+
+  [BTC x 4h] fetching... OK oldest: 2025-05-02  (46171 markets found)
+
+  [BTC x 1d] fetching... OK oldest: 2025-05-02  (46211 markets found)
+
+  [ETH x 5m] fetching... OK oldest: 2025-05-02  (46162 markets found)
+
+  [ETH x 15m] fetching... OK oldest: 2025-05-02  (46147 markets found)
+
+  [ETH x 1h] fetching... OK oldest: 2025-05-02  (46182 markets found)
+
+  [ETH x 4h] fetching... OK oldest: 2025-05-02  (46173 markets found)
+
+  [ETH x 1d] fetching... OK oldest: 2025-05-02  (46216 markets found)
+
+  [SOL x 5m] fetching... OK oldest: 2025-05-02  (46091 markets found)
+
+  [SOL x 15m] fetching... OK oldest: 2025-05-02  (46181 markets found)
+
+  [SOL x 1h] fetching... OK oldest: 2025-05-02  (46168 markets found)
+
+  [SOL x 4h] fetching... OK oldest: 2025-05-02  (46120 markets found)
+
+  [SOL x 1d] fetching... OK oldest: 2025-05-02  (46168 markets found)
+
+  [XRP x 5m] fetching... OK oldest: 2025-05-02  (46106 markets found)
+
+  [XRP x 15m] fetching... OK oldest: 2025-05-02  (46063 markets found)
+
+  [XRP x 1h] fetching... OK oldest: 2025-05-02  (46049 markets found)
+
+  [XRP x 4h] fetching... OK oldest: 2025-05-02  (46026 markets found)
+
+  [XRP x 1d] fetching... OK oldest: 2025-05-02  (46025 markets found)
+
+  Missing combos: none
+
+
+ Writing JSON to .planning/research/oldest-markets.json...
+ Writing Markdown to .planning/research/oldest-markets.md...
+Traceback (most recent call last):
+  File "C:\Users\Ignacio\Documents\Poly\Proj_mac0\proj\AnalyzerDiagnosis\buscador.py", line 563, in <module>
+    asyncio.run(
+    ~~~~~~~~~~~^
+        explorer.run(
+        ^^^^^^^^^^^^^
+    ...<5 lines>...
+        )
+        ^
+    )
+    ^
+  File "C:\Python314\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Python314\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "C:\Users\Ignacio\Documents\Poly\Proj_mac0\proj\AnalyzerDiagnosis\buscador.py", line 529, in run
+    await self.run_sweep_mode(out_json, out_md, quiet=quiet)
+  File "C:\Users\Ignacio\Documents\Poly\Proj_mac0\proj\AnalyzerDiagnosis\buscador.py", line 510, in run_sweep_mode
+    print(f"\u2705 Complete. Outputs:")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2705' in position 0: character maps to <undefined>

@@ -1,0 +1,16 @@
+[
+  {
+    "id": "99999",
+    "slug": "bitcoin-up-or-down-april-17-2026-12pm-et",
+    "eventMetadata": {},
+    "markets": [
+      {
+        "id": "m1",
+        "slug": "bitcoin-up-or-down-april-17-2026-12pm-et",
+        "question": "Will BTC be up or down?",
+        "clobTokenIds": "[\"token_up\", \"token_down\"]",
+        "outcomes": "[\"UP\", \"DOWN\"]"
+      }
+    ]
+  }
+]

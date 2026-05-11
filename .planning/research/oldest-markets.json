@@ -1,0 +1,156 @@
+{
+  "generated_at": "2026-05-09T04:41:06.635027+00:00",
+  "combos_swept": 20,
+  "combos_found": 20,
+  "results": {
+    "BTC": {
+      "5m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48294
+      },
+      "15m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48362
+      },
+      "1h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48441
+      },
+      "4h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48495
+      },
+      "1d": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48843
+      }
+    },
+    "ETH": {
+      "5m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48671
+      },
+      "15m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48762
+      },
+      "1h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 48895
+      },
+      "4h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 49042
+      },
+      "1d": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 49392
+      }
+    },
+    "SOL": {
+      "5m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 49441
+      },
+      "15m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 49564
+      },
+      "1h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 49710
+      },
+      "4h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 49839
+      },
+      "1d": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 50178
+      }
+    },
+    "XRP": {
+      "5m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 50251
+      },
+      "15m": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 50391
+      },
+      "1h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 50531
+      },
+      "4h": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 13000
+      },
+      "1d": {
+        "found": true,
+        "slug": "will-bitcoin-hit-1m-before-gta-vi-872",
+        "created_at": "2025-05-02T15:24:45.042440",
+        "condition_id": "0xbb57ccf5853a85487bc3d83d04d669310d28c6c810758953b9d9b91d1aee89d2",
+        "total_found": 26000
+      }
+    }
+  },
+  "missing": []
+}
