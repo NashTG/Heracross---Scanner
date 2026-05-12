@@ -1,6 +1,7 @@
 """
 WebSocket client for capturing real-time Polymarket CLOB data.
 Connects to wss://ws.clob.polymarket.com and streams orderbook/trade updates.
+Supports authenticated connections for full access.
 """
 
 import asyncio
@@ -9,16 +10,59 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Any, Callable
-from contextlib import asynccontextmanager
+import hmac
+import hashlib
+import base64
+import time
+import os
 
 import websockets
 from websockets.asyncio.client import ClientConnection
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Get API credentials from environment
+API_KEY = os.getenv('POLYMARKET_API_KEY')
+API_SECRET = os.getenv('POLYMARKET_API_SECRET')
+PASSPHRASE = os.getenv('POLYMARKET_PASSPHRASE')
+
+if not all([API_KEY, API_SECRET, PASSPHRASE]):
+    logger.warning("API credentials not found. Running in public mode (limited access).")
+    AUTHENTICATED = False
+else:
+    AUTHENTICATED = True
+    logger.info("API credentials loaded. Running in authenticated mode.")
+
+
+def generate_auth_headers(method: str = "GET", request_path: str = "/ws") -> Dict[str, str]:
+    """Generate Polymarket CLOB authentication headers."""
+    if not AUTHENTICATED:
+        return {}
+    
+    timestamp = str(int(time.time()))
+    message = timestamp + method + request_path
+    
+    signature = hmac.new(
+        base64.b64decode(API_SECRET),
+        message.encode('utf-8'),
+        hashlib.sha256
+    ).digest()
+    signature_b64 = base64.b64encode(signature).decode('utf-8')
+    
+    return {
+        'POLY_API_KEY': API_KEY,
+        'POLY_PASSPHRASE': PASSPHRASE,
+        'POLY_TIMESTAMP': timestamp,
+        'POLY_SIGNATURE': signature_b64
+    }
 
 
 class WebSocketClient:
@@ -145,12 +189,27 @@ class WebSocketClient:
         logger.debug(f"Registered handler for {event_type}")
     
     async def connect(self):
-        """Establish WebSocket connection."""
+        """Establish WebSocket connection with optional authentication."""
         try:
+            # Generate auth headers if credentials are available
+            auth_headers = generate_auth_headers()
+            
+            # Prepare connection arguments
+            connect_kwargs = {
+                'ping_interval': self.PING_INTERVAL,
+                'ping_timeout': 10,
+            }
+            
+            # Add extra_headers if authenticated
+            if auth_headers:
+                connect_kwargs['extra_headers'] = auth_headers
+                logger.info("Connecting with authentication...")
+            else:
+                logger.info("Connecting without authentication (public mode)...")
+            
             self.ws = await websockets.connect(
                 self.WS_URL,
-                ping_interval=self.PING_INTERVAL,
-                ping_timeout=10
+                **connect_kwargs
             )
             logger.info(f"Connected to {self.WS_URL}")
             self.reconnect_delay = self.RECONNECT_DELAY  # Reset on success
