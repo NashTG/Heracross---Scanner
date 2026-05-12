@@ -1,8 +1,1 @@
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
-.env
-.DS_Store
-/data/
+Nothing needs to be added to .gitignore since the changes only include Python source files (.py) which are not build artifacts, dependencies, or temporary files.

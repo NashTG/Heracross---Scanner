@@ -1,0 +1,62 @@
+2026-05-11 23:40:19,050 - realtime_capture - INFO - Database initialized: polymarket_realtime.db
+2026-05-11 23:40:23,707 - realtime_capture - INFO - Database initialized: polymarket_realtime.db
+2026-05-11 23:40:23,708 - realtime_capture - INFO - Loaded 86 tokens from discovered_tokens.json
+2026-05-11 23:40:23,708 - realtime_capture - INFO - Using 5 tokens
+2026-05-11 23:40:23,708 - realtime_capture - INFO - Starting WebSocket capture for 5 tokens
+2026-05-11 23:40:23,709 - realtime_capture - INFO - Stopping WebSocket capture...
+2026-05-11 23:40:23,709 - realtime_capture - INFO - Capture stopped
+2026-05-11 23:40:27,826 - realtime_capture - INFO - Database initialized: polymarket_realtime.db
+2026-05-11 23:40:31,405 - realtime_capture - INFO - Database initialized: polymarket_realtime.db
+2026-05-11 23:40:31,406 - realtime_capture - INFO - Loaded 86 tokens from discovered_tokens.json
+2026-05-11 23:40:31,406 - realtime_capture - INFO - Using 3 tokens
+2026-05-11 23:40:31,406 - realtime_capture - INFO - Starting WebSocket capture for 3 tokens
+2026-05-11 23:40:31,407 - realtime_capture - INFO - Attempting WebSocket connection (standard)...
+2026-05-11 23:40:31,524 - realtime_capture - WARNING - Standard connection failed: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1010)
+2026-05-11 23:40:31,524 - realtime_capture - INFO - Attempting WebSocket connection (custom SSL)...
+2026-05-11 23:40:31,608 - realtime_capture - WARNING - Custom SSL connection failed: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1010)
+2026-05-11 23:40:31,609 - realtime_capture - INFO - Attempting WebSocket connection (with headers)...
+2026-05-11 23:40:31,609 - realtime_capture - WARNING - Connection with headers failed: BaseEventLoop.create_connection() got an unexpected keyword argument 'extra_headers'
+2026-05-11 23:40:31,609 - realtime_capture - INFO - Attempting WebSocket connection (TLS 1.2)...
+2026-05-11 23:40:31,616 - realtime_capture - WARNING - TLS 1.2 connection failed: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1010)
+2026-05-11 23:40:31,616 - realtime_capture - ERROR - All WebSocket connection strategies failed
+2026-05-11 23:40:31,616 - realtime_capture - WARNING - Reconnecting in 5s...
+2026-05-11 23:40:36,622 - realtime_capture - INFO - Attempting WebSocket connection (standard)...
+2026-05-11 23:40:36,695 - realtime_capture - WARNING - Standard connection failed: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1010)
+2026-05-11 23:40:36,695 - realtime_capture - INFO - Attempting WebSocket connection (custom SSL)...
+2026-05-11 23:40:36,784 - realtime_capture - WARNING - Custom SSL connection failed: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1010)
+2026-05-11 23:40:36,784 - realtime_capture - INFO - Attempting WebSocket connection (with headers)...
+2026-05-11 23:40:36,784 - realtime_capture - WARNING - Connection with headers failed: BaseEventLoop.create_connection() got an unexpected keyword argument 'extra_headers'
+2026-05-11 23:40:36,784 - realtime_capture - INFO - Attempting WebSocket connection (TLS 1.2)...
+2026-05-11 23:40:36,793 - realtime_capture - WARNING - TLS 1.2 connection failed: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1010)
+2026-05-11 23:40:36,793 - realtime_capture - ERROR - All WebSocket connection strategies failed
+2026-05-11 23:40:36,793 - realtime_capture - WARNING - Reconnecting in 10s...
+2026-05-11 23:40:45,571 - realtime_capture - INFO - 
+Shutdown signal received
+2026-05-11 23:40:45,571 - realtime_capture - INFO - Stopping WebSocket capture...
+2026-05-11 23:40:46,796 - realtime_capture - INFO - Stopping WebSocket capture...
+2026-05-11 23:40:46,796 - realtime_capture - INFO - Capture stopped
+2026-05-11 23:40:50,751 - realtime_capture - INFO - Database initialized: polymarket_realtime.db
+2026-05-11 23:40:50,752 - realtime_capture - INFO - Loaded 86 tokens from discovered_tokens.json
+2026-05-11 23:40:50,752 - realtime_capture - INFO - Using 5 tokens
+2026-05-11 23:40:50,752 - realtime_capture - INFO - Starting REST polling (interval: 2.0s) for 5 tokens
+2026-05-11 23:40:50,944 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:40:52,926 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:40:54,932 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:40:56,931 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:40:58,937 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:41:00,932 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:41:02,941 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:41:04,940 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:41:06,963 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:41:08,952 - realtime_capture - WARNING - Price fetch failed: 400
+2026-05-11 23:41:08,952 - realtime_capture - INFO - Poll #10: 0 tokens, 0.17s
+2026-05-11 23:41:09,924 - realtime_capture - INFO - 
+Shutdown signal received
+2026-05-11 23:41:09,924 - realtime_capture - INFO - Stopping REST polling...
+2026-05-11 23:41:10,781 - realtime_capture - INFO - Stopping REST polling...
+2026-05-11 23:41:10,781 - realtime_capture - INFO - Capture stopped
+2026-05-11 23:41:10,783 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x7fe9f1f56000>
+2026-05-11 23:41:10,783 - asyncio - ERROR - Unclosed connector
+connections: ['deque([(<aiohttp.client_proto.ResponseHandler object at 0x7fe9f2157e30>, 2422.783642609)])']
+connector: <aiohttp.connector.TCPConnector object at 0x7fe9f1f56420>
