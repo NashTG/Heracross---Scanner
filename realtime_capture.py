@@ -307,12 +307,14 @@ class WebSocketCapture:
     def __init__(self, db: DatabaseManager):
         self.db = db
         self.tokens: List[str] = []
-        self.channels: List[str] = ['l2_book', 'trade', 'ticker', 'best_bid_ask']
+        # Polymarket CLOB WS supports: book, trade, user (user requires auth)
+        self.channels: List[str] = ['book', 'trade']
         self.running = False
         self.reconnect_delay = 5
         self.max_reconnect_delay = 60
         self.message_count = 0
         self.error_count = 0
+        self._ws: Optional[Any] = None  # active WS handle for mid-session subscribe/unsubscribe
     
     async def connect(self) -> Optional[Any]:
         """Establish WebSocket connection with multiple fallback strategies"""
@@ -402,29 +404,79 @@ class WebSocketCapture:
             }
             await ws.send(json.dumps(msg))
             logger.info(f"Subscribed to '{channel}' for {len(self.tokens)} tokens")
+
+    async def add_tokens(self, new_tokens: List[str]):
+        """Subscribe to additional tokens on the live WebSocket (no reconnect)."""
+        new_tokens = [t for t in new_tokens if t not in self.tokens]
+        if not new_tokens:
+            return
+        self.tokens.extend(new_tokens)
+        if self._ws is None:
+            return  # will be picked up on next connect
+        for channel in self.channels:
+            try:
+                await self._ws.send(json.dumps({
+                    "type": "subscribe",
+                    "assets_ids": new_tokens,
+                    "channel": channel,
+                }))
+            except Exception as exc:
+                logger.warning(f"add_tokens send failed on '{channel}': {exc}")
+        logger.info(f"Subscribed to {len(new_tokens)} additional tokens")
+
+    async def remove_tokens(self, old_tokens: List[str]):
+        """Unsubscribe tokens on the live WebSocket (no reconnect)."""
+        old_tokens = [t for t in old_tokens if t in self.tokens]
+        if not old_tokens:
+            return
+        for t in old_tokens:
+            try:
+                self.tokens.remove(t)
+            except ValueError:
+                pass
+        if self._ws is None:
+            return
+        for channel in self.channels:
+            try:
+                await self._ws.send(json.dumps({
+                    "type": "unsubscribe",
+                    "assets_ids": old_tokens,
+                    "channel": channel,
+                }))
+            except Exception as exc:
+                logger.warning(f"remove_tokens send failed on '{channel}': {exc}")
+        logger.info(f"Unsubscribed from {len(old_tokens)} tokens")
     
     async def handle_message(self, message: str):
-        """Process incoming WebSocket message"""
+        """Process incoming WebSocket message.
+
+        Polymarket CLOB WS sends JSON arrays of events; each event has
+        event_type ('book' | 'price_change' | 'trade' | ...) and asset_id.
+        """
         try:
             data = json.loads(message)
             self.message_count += 1
-            
-            msg_type = data.get('type', 'unknown')
-            
-            if msg_type == 'l2_book':
-                await self.handle_l2_book(data)
-            elif msg_type == 'trade':
-                await self.handle_trade(data)
-            elif msg_type == 'ticker':
-                await self.handle_ticker(data)
-            elif msg_type == 'best_bid_ask':
-                await self.handle_best_bid_ask(data)
-            elif msg_type == 'subscription':
-                logger.info(f"Subscription confirmed: {data}")
-            else:
-                if self.message_count % 100 == 0:
-                    logger.debug(f"Received unknown message type: {msg_type}")
-                    
+
+            events = data if isinstance(data, list) else [data]
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+
+                etype = ev.get('event_type') or ev.get('type') or ''
+                if etype in ('book', 'book_snapshot', 'l2_book'):
+                    await self.handle_l2_book(ev)
+                elif etype == 'price_change':
+                    await self.handle_l2_book(ev)
+                elif etype in ('trade', 'last_trade_price'):
+                    await self.handle_trade(ev)
+                elif etype == 'tick_size_change':
+                    pass  # informational
+                elif ev.get('type') == 'subscription':
+                    logger.info(f"Subscription confirmed: {ev}")
+                else:
+                    if self.message_count % 200 == 0:
+                        logger.debug(f"Unknown event_type '{etype}': {json.dumps(ev)[:200]}")
+
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}, message: {message[:100]}")
         except Exception as e:
@@ -434,23 +486,44 @@ class WebSocketCapture:
                 logger.error("Too many errors, consider reconnecting")
     
     async def handle_l2_book(self, data: Dict):
-        """Handle L2 orderbook update"""
-        payload = data.get('data', {})
-        token_id = payload.get('token_id')
+        """Handle L2 orderbook update / price_change event."""
+        token_id = data.get('asset_id') or data.get('token_id')
         if not token_id:
             return
-        
+
+        def _price(level):
+            if isinstance(level, dict):
+                return level.get('price'), level.get('size')
+            if isinstance(level, (list, tuple)) and len(level) >= 2:
+                return level[0], level[1]
+            return None, None
+
         timestamp = time.time()
-        bids = {item['price']: item['size'] for item in payload.get('bids', [])}
-        asks = {item['price']: item['size'] for item in payload.get('asks', [])}
-        
-        # Save orderbook snapshot
+        bids: Dict = {}
+        asks: Dict = {}
+        for lvl in data.get('bids', []) or []:
+            p, s = _price(lvl)
+            if p is not None:
+                bids[str(p)] = s
+        for lvl in data.get('asks', []) or []:
+            p, s = _price(lvl)
+            if p is not None:
+                asks[str(p)] = s
+
+        # price_change events carry single price/size/side instead of full book
+        if not bids and not asks and data.get('price'):
+            side = (data.get('side') or '').lower()
+            p, s = data.get('price'), data.get('size')
+            if side in ('buy', 'bid'):
+                bids[str(p)] = s
+            elif side in ('sell', 'ask'):
+                asks[str(p)] = s
+
         self.db.save_orderbook(token_id, timestamp, bids, asks)
-        
-        # Also save as price tick with best bid/ask
+
         best_bid = max(float(p) for p in bids.keys()) if bids else None
         best_ask = min(float(p) for p in asks.keys()) if asks else None
-        
+
         tick = MarketData(
             token_id=token_id,
             timestamp=timestamp,
@@ -458,26 +531,25 @@ class WebSocketCapture:
             bid=best_bid,
             ask=best_ask,
             orderbook_bid_depth=bids,
-            orderbook_ask_depth=asks
+            orderbook_ask_depth=asks,
         )
         self.db.save_price_tick(tick)
-        
+
         if self.message_count % 500 == 0:
-            logger.info(f"L2 Book: {token_id} - Bid: {best_bid}, Ask: {best_ask}")
-    
+            logger.info(f"Book: {token_id[:16]}... bid={best_bid} ask={best_ask}")
+
     async def handle_trade(self, data: Dict):
-        """Handle individual trade"""
-        payload = data.get('data', {})
-        token_id = payload.get('token_id')
+        """Handle individual trade event."""
+        token_id = data.get('asset_id') or data.get('token_id')
         if not token_id:
             return
-        
+
         timestamp = time.time()
-        price = float(payload.get('price', 0))
-        size = float(payload.get('size', 0))
-        side = payload.get('side', 'unknown')
-        taker_order_id = payload.get('taker_order_id')
-        maker_order_id = payload.get('maker_order_id')
+        price = float(data.get('price', 0) or 0)
+        size = float(data.get('size', 0) or 0)
+        side = data.get('side', 'unknown')
+        taker_order_id = data.get('taker_order_id')
+        maker_order_id = data.get('maker_order_id')
         
         # Save trade
         self.db.save_trade(
@@ -562,21 +634,23 @@ class WebSocketCapture:
                 continue
             
             self.reconnect_delay = 5  # Reset on successful connection
-            
+            self._ws = ws
+
             try:
                 await self.subscribe(ws)
-                
+
                 # Message processing loop
                 async for message in ws:
                     if not self.running:
                         break
                     await self.handle_message(message)
-                    
+
             except websockets.exceptions.ConnectionClosed as e:
                 logger.warning(f"Connection closed: {e}")
             except Exception as e:
                 logger.error(f"WebSocket error: {e}")
             finally:
+                self._ws = None
                 try:
                     await ws.close()
                 except:
@@ -826,65 +900,246 @@ def load_discovered_tokens(filepath: str = 'discovered_tokens.json') -> List[str
         return []
 
 
-def discover_btc_markets_live(limit: int = 200) -> tuple[List[str], List[dict]]:
+TIMEFRAME_MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240}
+TIMEFRAME_TAG = {"5m": "5M", "15m": "15M", "1h": "1H", "4h": "4H"}
+
+
+def discover_rolling_btc_markets(timeframes: List[str]) -> List[dict]:
     """
-    Fetch live active BTC markets from Gamma API. Returns (token_ids, markets).
-    No file dependency — always reflects current Polymarket state.
-    Sorted by 24h volume so the most liquid markets come first.
+    Discover currently-active rolling BTC Up/Down markets, one per timeframe.
+
+    Filters: seriesSlug == f'btc-up-or-down-{tf}', closed is False, endDate > now.
+    Picks the smallest endDate per timeframe → the currently-resolving market.
+
+    Returns list of dicts with: timeframe, slug, end_dt, window_start_dt,
+        token_up, token_down, question.
     """
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     import json as _json
-    try:
-        resp = requests.get(
-            f"{GAMMA_API_BASE}/events",
-            params={"active": "true", "closed": "false", "archived": "false",
-                    "order": "volume24hr", "ascending": "false", "limit": limit},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        events = resp.json()
-    except Exception as exc:
-        logger.error(f"Live BTC discovery failed: {exc}")
-        return [], []
 
-    token_ids: List[str] = []
-    markets: List[dict] = []
+    now = _dt.now(_tz.utc)
+    result: List[dict] = []
 
-    for event in events:
-        title = event.get("title", "")
-        if not any(k in title.lower() for k in ("bitcoin", "btc")):
+    for tf in timeframes:
+        if tf not in TIMEFRAME_MINUTES:
+            logger.warning(f"Unknown timeframe '{tf}', skipping")
             continue
 
-        event_slug = event.get("slug", "")
-        for market in event.get("markets", []):
-            clob_ids = market.get("clobTokenIds", [])
-            if isinstance(clob_ids, str):
-                try:
-                    clob_ids = _json.loads(clob_ids)
-                except Exception:
-                    continue
+        try:
+            resp = requests.get(
+                f"{GAMMA_API_BASE}/events",
+                params={
+                    "tag_slug": TIMEFRAME_TAG[tf],
+                    "end_date_min": now.isoformat(),
+                    "limit": 50,
+                    "order": "endDate",
+                    "ascending": "true",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            events = resp.json()
+        except Exception as exc:
+            logger.error(f"Rolling discovery {tf} failed: {exc}")
+            continue
 
-            outcomes = market.get("outcomes", [])
-            if isinstance(outcomes, str):
-                try:
-                    outcomes = _json.loads(outcomes)
-                except Exception:
-                    outcomes = []
-
-            if len(clob_ids) < 2:
+        target_series = f"btc-up-or-down-{tf}"
+        candidates = []
+        for ev in events:
+            if ev.get("seriesSlug") != target_series:
                 continue
+            if ev.get("closed", True):
+                continue
+            end_str = ev.get("endDate", "")
+            try:
+                end_dt = _dt.fromisoformat(end_str.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if end_dt <= now:
+                continue
+            candidates.append((end_dt, ev))
 
-            token_ids.extend(clob_ids)
-            markets.append({
-                "token_yes": clob_ids[0],
-                "token_no":  clob_ids[1],
-                "question":  market.get("question", ""),
-                "event_slug": event_slug,
-                "outcomes":  outcomes,
-                "end_date":  market.get("endDate", ""),
-            })
+        if not candidates:
+            logger.warning(f"No active rolling {tf} BTC market found")
+            continue
 
-    logger.info(f"Live discovery: {len(markets)} BTC markets, {len(token_ids)} tokens")
-    return token_ids, markets
+        end_dt, ev = min(candidates, key=lambda x: x[0])
+        markets = ev.get("markets", [])
+        if not markets:
+            continue
+        market = markets[0]
+
+        clob_ids = market.get("clobTokenIds", [])
+        if isinstance(clob_ids, str):
+            try:
+                clob_ids = _json.loads(clob_ids)
+            except Exception:
+                continue
+        if len(clob_ids) < 2:
+            continue
+
+        window_start_dt = end_dt - _td(minutes=TIMEFRAME_MINUTES[tf])
+        result.append({
+            "timeframe":       tf,
+            "slug":            ev.get("slug", ""),
+            "question":        market.get("question", ev.get("title", "")),
+            "end_dt":          end_dt,
+            "window_start_dt": window_start_dt,
+            "token_up":        clob_ids[0],
+            "token_down":      clob_ids[1],
+        })
+
+    logger.info(
+        f"Rolling discovery: {len(result)}/{len(timeframes)} timeframes resolved "
+        f"({[m['timeframe'] for m in result]})"
+    )
+    return result
+
+
+async def run_anchor_recorder(
+    rotator: 'RollingMarketRotator',
+    db: 'DatabaseManager',
+    poll_interval: float = 1.0,
+):
+    """
+    For each active rolling market, once now >= window_start_dt and no anchor has
+    been recorded, snapshot Binance BTC/USDT spot and freeze it as the anchor.
+    Writes to spot_prices with source=f'anchor_{tf}'.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    binance_url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                now = _dt.now(_tz.utc)
+                pending = []
+                for tf, market in rotator.active.items():
+                    if rotator.anchors.get(tf) is not None:
+                        continue
+                    if now >= market["window_start_dt"]:
+                        pending.append((tf, market))
+
+                if pending:
+                    try:
+                        async with session.get(
+                            binance_url, timeout=aiohttp.ClientTimeout(total=5)
+                        ) as r:
+                            payload = await r.json()
+                            price = float(payload["price"])
+                    except Exception as exc:
+                        logger.warning(f"Anchor fetch failed: {exc}")
+                        await asyncio.sleep(poll_interval)
+                        continue
+
+                    ts_ms = int(now.timestamp() * 1000)
+                    for tf, market in pending:
+                        rotator.anchors[tf] = price
+                        db.save_spot_price(
+                            symbol="BTC",
+                            source=f"anchor_{tf}",
+                            timestamp_ms=ts_ms,
+                            price=price,
+                            bid=price,
+                            ask=price,
+                        )
+                        logger.info(
+                            f"Anchor[{tf}]: locked at ${price:,.2f} for "
+                            f"{market['slug']} (window ends {market['end_dt']:%H:%M:%S} UTC)"
+                        )
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(f"Anchor recorder error: {exc}")
+            await asyncio.sleep(poll_interval)
+
+
+class RollingMarketRotator:
+    """
+    Tracks the currently-active rolling BTC Up/Down market per timeframe.
+    Every `poll_interval` seconds re-discovers and emits add/remove token diffs.
+
+    Shared `anchors` dict: {timeframe -> anchor_price}. Reset to None on rotation.
+    Shared `active` dict: {timeframe -> RollingMarket dict}. Replaced on rotation.
+    """
+
+    def __init__(self, timeframes: List[str], capture: 'WebSocketCapture',
+                 db: 'DatabaseManager', poll_interval: float = 15.0):
+        self.timeframes = timeframes
+        self.capture = capture
+        self.db = db
+        self.poll_interval = poll_interval
+        self.active: Dict[str, dict] = {}          # tf -> RollingMarket
+        self.anchors: Dict[str, Optional[float]] = {tf: None for tf in timeframes}
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def tokens_for(self, market: dict) -> List[str]:
+        return [market["token_up"], market["token_down"]]
+
+    async def discover_once(self) -> List[dict]:
+        # Discovery is sync (requests); run in default executor
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, discover_rolling_btc_markets, self.timeframes
+        )
+
+    async def run(self):
+        # Initial bootstrap
+        await self._apply()
+        # Periodic rediscovery
+        while not self._stop:
+            await asyncio.sleep(self.poll_interval)
+            if self._stop:
+                break
+            await self._apply()
+
+    async def _apply(self):
+        try:
+            fresh = await self.discover_once()
+        except Exception as exc:
+            logger.warning(f"Rotator: discovery error: {exc}")
+            return
+
+        fresh_by_tf = {m["timeframe"]: m for m in fresh}
+
+        for tf in self.timeframes:
+            new = fresh_by_tf.get(tf)
+            old = self.active.get(tf)
+
+            if new is None:
+                continue  # nothing active right now for this tf; keep old until it expires
+
+            if old is None or old.get("slug") != new.get("slug"):
+                # rotation (or first attach)
+                old_tokens = self.tokens_for(old) if old else []
+                new_tokens = self.tokens_for(new)
+
+                if old:
+                    logger.info(
+                        f"Rotator[{tf}]: rotating {old['slug']} -> {new['slug']} "
+                        f"(window {new['window_start_dt']:%H:%M:%S}-{new['end_dt']:%H:%M:%S} UTC)"
+                    )
+                else:
+                    logger.info(
+                        f"Rotator[{tf}]: attached {new['slug']} "
+                        f"(window {new['window_start_dt']:%H:%M:%S}-{new['end_dt']:%H:%M:%S} UTC)"
+                    )
+
+                if old_tokens:
+                    await self.capture.remove_tokens(old_tokens)
+                await self.capture.add_tokens(new_tokens)
+
+                # Register markets in DB
+                for tok in new_tokens:
+                    self.db.register_market(tok, event_name=new.get("slug"),
+                                            question=new.get("question"))
+
+                self.active[tf] = new
+                self.anchors[tf] = None  # reset anchor for the new window
 
 
 async def main():
@@ -906,44 +1161,65 @@ async def main():
                        help='Skip spot price capture entirely')
     parser.add_argument('--disable-pruning', action='store_true',
                        help='Disable the retention pruning job (data grows unbounded)')
+    parser.add_argument('--timeframes', type=str, default='5m,15m',
+                       help='Rolling BTC Up/Down timeframes to watch (comma-sep). '
+                            'Valid: 5m,15m,1h,4h. Default: 5m,15m')
+    parser.add_argument('--rotator-interval', type=float, default=15.0,
+                       help='Seconds between rolling-market rediscovery (default: 15)')
 
     args = parser.parse_args()
 
     # Initialize database
     db = DatabaseManager()
 
-    # Get tokens — live discovery is the default
-    btc_markets: List[dict] = []
+    # Parse timeframes
+    timeframes = [t.strip() for t in args.timeframes.split(',') if t.strip()]
+    invalid = [t for t in timeframes if t not in TIMEFRAME_MINUTES]
+    if invalid:
+        logger.error(f"Invalid timeframes: {invalid}. Valid: {list(TIMEFRAME_MINUTES)}")
+        return
+
+    # Resolution path: rolling rotator (default) vs manual tokens/file
+    use_rotator = not (args.tokens or args.token_file)
+
+    # Get initial tokens
     if args.tokens:
         tokens = [t.strip() for t in args.tokens.split(',')]
     elif args.token_file:
         tokens = load_discovered_tokens(args.token_file)
     else:
-        tokens, btc_markets = discover_btc_markets_live()
+        # Bootstrap from rolling discovery; rotator will keep this in sync
+        initial_markets = discover_rolling_btc_markets(timeframes)
+        tokens = []
+        for m in initial_markets:
+            tokens.append(m["token_up"])
+            tokens.append(m["token_down"])
 
     if not tokens:
-        logger.error("No tokens found. Check network or pass --tokens / --token-file")
+        logger.error("No tokens to subscribe. Check network or pass --tokens / --token-file")
         return
 
     if args.limit > 0:
         tokens = tokens[:args.limit]
 
-    logger.info(f"Using {len(tokens)} tokens")
+    logger.info(f"Using {len(tokens)} tokens "
+                f"({'rolling rotator' if use_rotator else 'manual'})")
 
-    # Resolve spot assets from live markets or file
+    # Spot assets: for rolling mode we know it's BTC. For manual mode, resolve via file/markets.
     spot_symbols: Set[str] = set()
     if not args.disable_spot:
-        try:
-            if btc_markets:
-                # Build symbol mapping from live market questions
-                from spot_asset_resolver import resolve_assets_from_markets
-                token_to_symbol, spot_symbols = resolve_assets_from_markets(btc_markets)
-            else:
+        if use_rotator:
+            spot_symbols = {"BTC"}
+            db.save_market_assets({t: "BTC" for t in tokens})
+        else:
+            try:
                 from spot_asset_resolver import resolve_assets
-                token_to_symbol, spot_symbols = resolve_assets(args.token_file or 'discovered_tokens.json')
-            db.save_market_assets(token_to_symbol)
-        except Exception as exc:
-            logger.error(f"Spot asset resolution failed (continuing without spot): {exc}")
+                token_to_symbol, spot_symbols = resolve_assets(
+                    args.token_file or 'discovered_tokens.json'
+                )
+                db.save_market_assets(token_to_symbol)
+            except Exception as exc:
+                logger.error(f"Spot asset resolution failed (continuing without spot): {exc}")
 
     # Select Polymarket capture strategy
     if args.strategy == 'websocket':
@@ -967,10 +1243,13 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Run capture + optional spot poller + pruning job concurrently
+    # Run capture + optional spot poller + pruning job + rotator/anchor concurrently
     try:
         spot_task: Optional[asyncio.Task] = None
         prune_task: Optional[asyncio.Task] = None
+        rotator_task: Optional[asyncio.Task] = None
+        anchor_task: Optional[asyncio.Task] = None
+
         poly_task = asyncio.create_task(capture.run(tokens), name="polymarket_capture")
         all_tasks.append(poly_task)
 
@@ -990,12 +1269,30 @@ async def main():
             )
             all_tasks.append(prune_task)
 
+        # Rotator + anchor recorder only when running in rolling mode with a WS capture
+        if use_rotator and isinstance(capture, WebSocketCapture):
+            rotator = RollingMarketRotator(
+                timeframes=timeframes,
+                capture=capture,
+                db=db,
+                poll_interval=args.rotator_interval,
+            )
+            rotator_task = asyncio.create_task(
+                _resilient_task(rotator.run, label="RollingRotator"),
+                name="rolling_rotator",
+            )
+            anchor_task = asyncio.create_task(
+                _resilient_task(run_anchor_recorder, rotator, db, label="AnchorRecorder"),
+                name="anchor_recorder",
+            )
+            all_tasks.extend([rotator_task, anchor_task])
+
         try:
             await poly_task
         except asyncio.CancelledError:
             pass
         finally:
-            for t in [spot_task, prune_task]:
+            for t in [spot_task, prune_task, rotator_task, anchor_task]:
                 if t and not t.done():
                     t.cancel()
                     try:
