@@ -19,7 +19,7 @@ import sqlite3
 import logging
 import argparse
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Set
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import ssl
@@ -156,12 +156,38 @@ class DatabaseManager:
             )
         ''')
         
+        # Spot prices table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS spot_prices (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol       TEXT    NOT NULL,
+                source       TEXT    NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                price        REAL    NOT NULL,
+                bid          REAL,
+                ask          REAL,
+                ingestion_ts INTEGER NOT NULL
+            )
+        ''')
+
+        # Market assets mapping table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS market_assets (
+                token_id    TEXT PRIMARY KEY,
+                symbol      TEXT NOT NULL,
+                resolved_at INTEGER NOT NULL
+            )
+        ''')
+
         # Create indexes for fast queries
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_ticks_token_time ON price_ticks(token_id, timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_token_time ON trades(token_id, timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_orderbook_token_time ON orderbook_snapshots(token_id, timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_ticker_token_time ON ticker_updates(token_id, timestamp)')
-        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_spot_symbol_ts ON spot_prices(symbol, timestamp_ms)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_spot_ts ON spot_prices(timestamp_ms)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_market_assets_symbol ON market_assets(symbol)')
+
         conn.commit()
         conn.close()
         logger.info(f"Database initialized: {self.db_path}")
@@ -233,6 +259,34 @@ class DatabaseManager:
         conn.commit()
         conn.close()
     
+    def save_spot_price(self, symbol: str, source: str, timestamp_ms: int,
+                        price: float, bid: float = None, ask: float = None):
+        """Persist a single spot price tick."""
+        ingestion_ts = int(time.time() * 1000)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            'INSERT INTO spot_prices (symbol, source, timestamp_ms, price, bid, ask, ingestion_ts) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (symbol, source, timestamp_ms, price, bid, ask, ingestion_ts)
+        )
+        conn.commit()
+        conn.close()
+
+    def save_market_assets(self, mapping: Dict[str, str]):
+        """Bulk upsert token_id → symbol into market_assets."""
+        if not mapping:
+            return
+        resolved_at = int(time.time() * 1000)
+        rows = [(token_id, symbol, resolved_at) for token_id, symbol in mapping.items()]
+        conn = sqlite3.connect(self.db_path)
+        conn.executemany(
+            'INSERT OR REPLACE INTO market_assets (token_id, symbol, resolved_at) VALUES (?, ?, ?)',
+            rows
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f"Saved {len(rows)} market asset mapping(s)")
+
     def register_market(self, token_id: str, event_name: str = None, question: str = None):
         """Register a market"""
         conn = sqlite3.connect(self.db_path)
@@ -723,6 +777,48 @@ class HybridCapture:
         logger.info("Stopping Hybrid capture...")
 
 
+async def run_pruning_loop(db_path: str, retention_days: int = 7):
+    """Delete rows older than retention_days every 6 hours."""
+    logger.info(f"PruningJob: started (retention={retention_days}d, interval=6h)")
+    while True:
+        await asyncio.sleep(6 * 3600)
+        cutoff_ms = int((time.time() - retention_days * 86400) * 1000)
+        cutoff_secs = cutoff_ms / 1000.0
+        cutoff_iso = datetime.utcfromtimestamp(cutoff_secs).isoformat()
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("DELETE FROM spot_prices WHERE timestamp_ms < ?", (cutoff_ms,))
+            conn.execute("DELETE FROM orderbook_snapshots WHERE timestamp < ?", (cutoff_secs,))
+            conn.execute("DELETE FROM trades WHERE timestamp < ?", (cutoff_secs,))
+            conn.execute("DELETE FROM price_ticks WHERE timestamp < ?", (cutoff_secs,))
+            conn.execute("DELETE FROM ticker_updates WHERE timestamp < ?", (cutoff_secs,))
+            conn.execute("VACUUM")
+            conn.commit()
+            conn.close()
+            logger.info(f"PruningJob: pruned rows older than {cutoff_iso}")
+        except Exception as exc:
+            logger.error(f"PruningJob: error during pruning: {exc}")
+
+
+async def _resilient_task(coro_fn, *args, max_restarts: int = 5, restart_delay: float = 5.0,
+                          label: str = "task", **kwargs):
+    """Run a coroutine function with automatic restart on failure (up to max_restarts)."""
+    restarts = 0
+    while restarts <= max_restarts:
+        try:
+            await coro_fn(*args, **kwargs)
+            return  # clean exit
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            restarts += 1
+            if restarts > max_restarts:
+                logger.error(f"{label}: exceeded max restarts ({max_restarts}), giving up: {exc}")
+                return
+            logger.warning(f"{label}: crashed (attempt {restarts}/{max_restarts}): {exc}. Restarting in {restart_delay}s")
+            await asyncio.sleep(restart_delay)
+
+
 def load_discovered_tokens(filepath: str = 'discovered_tokens.json') -> List[str]:
     """Load tokens from discovery file"""
     try:
@@ -741,7 +837,7 @@ def load_discovered_tokens(filepath: str = 'discovered_tokens.json') -> List[str
 
 async def main():
     parser = argparse.ArgumentParser(description='Polymarket Real-Time Data Capture')
-    parser.add_argument('--strategy', choices=['websocket', 'rest', 'hybrid'], 
+    parser.add_argument('--strategy', choices=['websocket', 'rest', 'hybrid'],
                        default='websocket', help='Capture strategy')
     parser.add_argument('--tokens', type=str, help='Comma-separated token IDs')
     parser.add_argument('--token-file', type=str, default='discovered_tokens.json',
@@ -750,48 +846,103 @@ async def main():
                        help='REST polling interval in seconds')
     parser.add_argument('--limit', type=int, default=0,
                        help='Limit number of tokens (0 = all)')
-    
+    parser.add_argument('--spot-interval', type=float, default=1.0,
+                       help='Spot price REST fallback poll interval in seconds (default: 1.0)')
+    parser.add_argument('--retention-days', type=int, default=7,
+                       help='Days to retain time-series rows before pruning (default: 7)')
+    parser.add_argument('--disable-spot', action='store_true',
+                       help='Skip spot price capture entirely')
+    parser.add_argument('--disable-pruning', action='store_true',
+                       help='Disable the retention pruning job (data grows unbounded)')
+
     args = parser.parse_args()
-    
+
     # Initialize database
     db = DatabaseManager()
-    
+
     # Get tokens
     if args.tokens:
         tokens = [t.strip() for t in args.tokens.split(',')]
     else:
         tokens = load_discovered_tokens(args.token_file)
-    
+
     if not tokens:
         logger.error("No tokens specified. Use --tokens or ensure token file exists")
         return
-    
+
     if args.limit > 0:
         tokens = tokens[:args.limit]
-    
+
     logger.info(f"Using {len(tokens)} tokens")
-    
-    # Select strategy
+
+    # Resolve spot assets (synchronous, runs before event loop tasks)
+    spot_symbols: Set[str] = set()
+    if not args.disable_spot:
+        try:
+            from spot_asset_resolver import resolve_assets
+            token_to_symbol, spot_symbols = resolve_assets(args.token_file)
+            db.save_market_assets(token_to_symbol)
+        except Exception as exc:
+            logger.error(f"Spot asset resolution failed (continuing without spot): {exc}")
+
+    # Select Polymarket capture strategy
     if args.strategy == 'websocket':
         capture = WebSocketCapture(db)
     elif args.strategy == 'rest':
         capture = RESTPollingCapture(db, args.interval)
     else:  # hybrid
         capture = HybridCapture(db, args.interval)
-    
+
     # Handle shutdown
     import signal
-    
+
+    all_tasks: List[asyncio.Task] = []
+
     def signal_handler(sig, frame):
         logger.info("\nShutdown signal received")
         capture.stop()
-    
+        for t in all_tasks:
+            t.cancel()
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Run capture
+
+    # Run capture + optional spot poller + pruning job concurrently
     try:
-        await capture.run(tokens)
+        spot_task: Optional[asyncio.Task] = None
+        prune_task: Optional[asyncio.Task] = None
+        poly_task = asyncio.create_task(capture.run(tokens), name="polymarket_capture")
+        all_tasks.append(poly_task)
+
+        if not args.disable_spot and spot_symbols:
+            from spot_price_poller import SpotPricePoller
+            poller = SpotPricePoller(db, poll_interval=args.spot_interval)
+            spot_task = asyncio.create_task(
+                _resilient_task(poller.run, spot_symbols, label="SpotPricePoller"),
+                name="spot_poller"
+            )
+            all_tasks.append(spot_task)
+
+        if not args.disable_pruning:
+            prune_task = asyncio.create_task(
+                run_pruning_loop(db.db_path, args.retention_days),
+                name="pruning_job"
+            )
+            all_tasks.append(prune_task)
+
+        try:
+            await poly_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            for t in [spot_task, prune_task]:
+                if t and not t.done():
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     finally:
