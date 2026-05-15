@@ -48,7 +48,7 @@ logging.basicConfig(
 logger = logging.getLogger('realtime_capture')
 
 # Constants
-WEBSOCKET_URL = "wss://ws.clob.polymarket.com"
+WEBSOCKET_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 CLOB_API_BASE = "https://clob.polymarket.com"
 
@@ -393,24 +393,15 @@ class WebSocketCapture:
         return None
     
     async def subscribe(self, ws: Any):
-        """Subscribe to channels for all tokens"""
-        subscribe_msg = {
-            "type": "subscribe",
-            "payload": {
-                "channels": self.channels,
-                "token_ids": self.tokens
+        """Subscribe to channels for all tokens (one message per channel)."""
+        for channel in self.channels:
+            msg = {
+                "type": "subscribe",
+                "assets_ids": self.tokens,
+                "channel": channel,
             }
-        }
-        
-        await ws.send(json.dumps(subscribe_msg))
-        logger.info(f"Subscribed to {len(self.channels)} channels for {len(self.tokens)} tokens")
-        
-        # Wait for subscription confirmation
-        try:
-            response = await asyncio.wait_for(ws.recv(), timeout=10.0)
-            logger.info(f"Subscription response: {response[:200]}...")
-        except asyncio.TimeoutError:
-            logger.warning("Subscription confirmation timeout")
+            await ws.send(json.dumps(msg))
+            logger.info(f"Subscribed to '{channel}' for {len(self.tokens)} tokens")
     
     async def handle_message(self, message: str):
         """Process incoming WebSocket message"""
