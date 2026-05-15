@@ -1,58 +1,72 @@
 #!/usr/bin/env python3
 """
-Live tick printer for active Polymarket BTC markets.
+Live BTC ticker — subscribes to active Polymarket BTC markets and prints every book tick.
 
-Prints every book update:
-  market_name | up_price | down_price | btc_to_beat | btc_delta
+Output columns:
+  TIME | MARKET (truncated) | UP (YES mid) | DOWN (NO mid) | TARGET ($) | BTC (spot) | DELTA
 
 Usage:
-    python ticker.py
-    python ticker.py --tag btc --limit 20 --spot-interval 5
+    python ticker.py                      # live BTC markets, auto-discovered
+    python ticker.py --debug              # also print first 5 raw WS messages
+    python ticker.py --limit 20           # cap to top 20 markets by volume
+    python ticker.py --spot-interval 3    # Binance poll every 3s
 """
+import argparse
 import asyncio
 import json
-import os
 import re
 import sys
-import time
-import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import aiohttp
+import requests
 import websockets
-from dotenv import load_dotenv
-
-load_dotenv()
 
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 GAMMA_API = "https://gamma-api.polymarket.com"
-BINANCE_TICKER = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+BINANCE_PRICE_URL = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+
 
 # ---------------------------------------------------------------------------
-# Market loading
+# Market discovery
 # ---------------------------------------------------------------------------
 
-def fetch_btc_markets(tag_slug: str = "crypto", limit: int = 50) -> list[dict]:
-    """Fetch active markets and return structured BTC market list."""
-    import requests
-    resp = requests.get(f"{GAMMA_API}/events", params={"tag_slug": tag_slug, "active": "true", "limit": limit}, timeout=10)
+def fetch_btc_markets(limit: int = 200) -> list[dict]:
+    """
+    Pull live active BTC markets from Gamma API.
+    Returns a list of market dicts, each with YES/NO token IDs and metadata.
+    Sorted by event 24h volume descending (most liquid first).
+    """
+    resp = requests.get(
+        f"{GAMMA_API}/events",
+        params={
+            "active": "true",
+            "closed": "false",
+            "archived": "false",
+            "order": "volume24hr",
+            "ascending": "false",
+            "limit": limit,
+        },
+        timeout=15,
+    )
     resp.raise_for_status()
     events = resp.json()
 
     markets = []
     for event in events:
+        title = event.get("title", "")
+        if not any(k in title.lower() for k in ("bitcoin", "btc")):
+            continue
         for market in event.get("markets", []):
-            q = market.get("question", "")
-            if not any(k in q.lower() for k in ("bitcoin", "btc")):
-                continue
-
             clob_ids = market.get("clobTokenIds", [])
             if isinstance(clob_ids, str):
                 try:
                     clob_ids = json.loads(clob_ids)
                 except Exception:
                     continue
+            if len(clob_ids) < 2:
+                continue
 
             outcomes = market.get("outcomes", [])
             if isinstance(outcomes, str):
@@ -61,37 +75,35 @@ def fetch_btc_markets(tag_slug: str = "crypto", limit: int = 50) -> list[dict]:
                 except Exception:
                     outcomes = []
 
-            if len(clob_ids) < 2:
-                continue
-
-            btc_target = _parse_price_target(q)
             markets.append({
-                "question": q,
-                "slug": event.get("slug", ""),
-                "end_date": market.get("endDate", ""),
-                "token_yes": clob_ids[0],   # YES / Up outcome
-                "token_no":  clob_ids[1],   # NO  / Down outcome
-                "outcome_yes": outcomes[0] if outcomes else "Yes",
-                "outcome_no":  outcomes[1] if len(outcomes) > 1 else "No",
-                "btc_to_beat": btc_target,
+                "question":   market.get("question", title),
+                "event_slug": event.get("slug", ""),
+                "end_date":   market.get("endDate", ""),
+                "token_yes":  clob_ids[0],
+                "token_no":   clob_ids[1],
+                "outcomes":   outcomes,
+                "btc_target": _parse_target(market.get("question", title)),
             })
+
     return markets
 
 
-def _parse_price_target(question: str) -> Optional[float]:
+def _parse_target(question: str) -> Optional[float]:
     """Extract the first dollar/k price from a question string."""
-    # e.g. "$105,000", "$95k", "100000"
     m = re.search(r'\$?([\d,]+)(?:\.[\d]+)?([kK])?', question)
     if not m:
         return None
-    digits = float(m.group(1).replace(",", ""))
+    val = float(m.group(1).replace(",", ""))
     if m.group(2):
-        digits *= 1000
-    return digits
+        val *= 1000
+    # Sanity: BTC prices are roughly $1k–$500k
+    if not (1_000 <= val <= 500_000):
+        return None
+    return val
 
 
 # ---------------------------------------------------------------------------
-# Spot BTC price (Binance REST, polled in background)
+# Binance spot tracker
 # ---------------------------------------------------------------------------
 
 class SpotTracker:
@@ -104,9 +116,12 @@ class SpotTracker:
         async with aiohttp.ClientSession() as session:
             while not self._stop:
                 try:
-                    async with session.get(BINANCE_TICKER, timeout=aiohttp.ClientTimeout(total=5)) as r:
-                        d = await r.json()
-                        self.price = float(d["price"])
+                    async with session.get(
+                        BINANCE_PRICE_URL,
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as r:
+                        data = await r.json()
+                        self.price = float(data["price"])
                 except Exception:
                     pass
                 await asyncio.sleep(self.interval)
@@ -116,90 +131,130 @@ class SpotTracker:
 
 
 # ---------------------------------------------------------------------------
-# WS listener
+# Ticker
 # ---------------------------------------------------------------------------
 
 class Ticker:
-    def __init__(self, markets: list[dict], spot: SpotTracker):
+    def __init__(self, markets: list[dict], spot: SpotTracker, debug: bool = False):
         self.markets = markets
         self.spot = spot
+        self.debug = debug
+        self._debug_count = 0
 
-        # token_id → market + side
-        self._token_map: dict[str, dict] = {}
+        # token_id → {"side": "yes"|"no", **market_dict}
+        self._map: dict[str, dict] = {}
         for m in markets:
-            self._token_map[m["token_yes"]] = {**m, "side": "yes"}
-            self._token_map[m["token_no"]]  = {**m, "side": "no"}
+            self._map[m["token_yes"]] = {**m, "side": "yes"}
+            self._map[m["token_no"]]  = {**m, "side": "no"}
 
         # best mid-price per token
         self._prices: dict[str, float] = {}
 
     def _mid(self, bids: list, asks: list) -> Optional[float]:
-        """Best bid/ask midpoint, or best available side."""
-        best_bid = float(bids[0]["price"]) if bids else None
-        best_ask = float(asks[0]["price"]) if asks else None
+        def price_of(level):
+            if isinstance(level, dict):
+                return float(level.get("price", 0) or 0)
+            if isinstance(level, (list, tuple)) and level:
+                return float(level[0])
+            return 0.0
+
+        best_bid = price_of(bids[0]) if bids else None
+        best_ask = price_of(asks[0]) if asks else None
         if best_bid and best_ask:
             return (best_bid + best_ask) / 2
         return best_bid or best_ask
 
-    def _handle_book(self, event: dict):
-        token_id = event.get("asset_id", "")
-        if token_id not in self._token_map:
+    def _handle_event(self, ev: dict):
+        if not isinstance(ev, dict):
             return
 
-        bids = event.get("bids", [])
-        asks = event.get("asks", [])
+        etype = ev.get("event_type") or ev.get("type") or ""
+
+        if etype not in ("book", "book_snapshot", "l2_book", "price_change", "last_trade_price"):
+            return
+
+        token_id = ev.get("asset_id", "") or ev.get("token_id", "")
+        if not token_id or token_id not in self._map:
+            return
+
+        bids = ev.get("bids", [])
+        asks = ev.get("asks", [])
+
+        # price_change events carry last_trade_price instead of bids/asks
         if not bids and not asks:
+            ltp = ev.get("price") or ev.get("last_trade_price")
+            if ltp:
+                self._prices[token_id] = float(ltp)
+                self._print_tick(token_id)
             return
 
         mid = self._mid(bids, asks)
         if mid is None:
             return
-
         self._prices[token_id] = mid
         self._print_tick(token_id)
 
-    def _print_tick(self, updated_token: str):
-        info = self._token_map[updated_token]
-        tok_yes = info["token_yes"]
-        tok_no  = info["token_no"]
+    def _print_tick(self, token_id: str):
+        info = self._map[token_id]
+        yes_tok = info["token_yes"]
+        no_tok  = info["token_no"]
 
-        up_price   = self._prices.get(tok_yes)
-        down_price = self._prices.get(tok_no)
+        up_p   = self._prices.get(yes_tok)
+        down_p = self._prices.get(no_tok)
 
-        if up_price is None and down_price is None:
+        if up_p is None and down_p is None:
             return
 
-        btc_to_beat = info["btc_to_beat"]
-        btc_now     = self.spot.price
-        btc_delta   = (btc_now - btc_to_beat) if (btc_now and btc_to_beat) else None
+        target  = info["btc_target"]
+        btc_now = self.spot.price
+        delta   = (btc_now - target) if (btc_now and target) else None
 
-        ts   = datetime.utcnow().strftime("%H:%M:%S")
-        name = info["question"][:55]
-        up_s   = f"{up_price:.3f}"   if up_price   is not None else "  ---"
-        down_s = f"{down_price:.3f}" if down_price  is not None else "  ---"
-        beat_s = f"${btc_to_beat:,.0f}" if btc_to_beat else "  ---"
-        btc_s  = f"${btc_now:,.0f}"     if btc_now    else "  ---"
-        delt_s = f"{btc_delta:+,.0f}"   if btc_delta  is not None else "  ---"
+        ts   = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        name = info["question"][:54]
+        up_s   = f"{up_p:.3f}"   if up_p   is not None else "  ---"
+        dn_s   = f"{down_p:.3f}" if down_p is not None else "  ---"
+        tgt_s  = f"${target:,.0f}" if target  else "  ?"
+        btc_s  = f"${btc_now:,.0f}" if btc_now else "  ?"
+        dlt_s  = f"{delta:+,.0f}"  if delta  is not None else "  ?"
 
-        print(f"{ts}  {name:<56} UP={up_s}  DN={down_s}  target={beat_s}  BTC={btc_s}  delta={delt_s}")
+        print(f"{ts}  {name:<55} UP={up_s}  DN={dn_s}  target={tgt_s:>10}  BTC={btc_s:>10}  delta={dlt_s:>8}")
 
     async def listen(self):
-        all_tokens = list(self._token_map.keys())
-        print(f"Connecting to {WS_URL}...")
+        all_tokens = list(self._map.keys())
+        print(f"\nConnecting to {WS_URL}")
         print(f"Watching {len(self.markets)} BTC markets ({len(all_tokens)} tokens)\n")
-        print(f"{'TIME':8}  {'MARKET':<56} {'UP':>7}  {'DOWN':>7}  {'TARGET':>10}  {'BTC':>10}  {'DELTA':>8}")
-        print("-" * 120)
+        print(
+            f"{'TIME':8}  {'MARKET':<55} {'UP':>7}  {'DOWN':>7}  "
+            f"{'TARGET':>12}  {'BTC':>12}  {'DELTA':>9}"
+        )
+        print("-" * 130)
 
         backoff = 2
         while True:
             try:
-                async with websockets.connect(WS_URL, ping_interval=20, ping_timeout=10, max_size=2**22) as ws:
+                async with websockets.connect(
+                    WS_URL,
+                    ping_interval=20,
+                    ping_timeout=10,
+                    max_size=2 ** 22,
+                ) as ws:
                     backoff = 2
-                    # subscribe — one message per channel
-                    msg = {"type": "subscribe", "assets_ids": all_tokens, "channel": "book"}
-                    await ws.send(json.dumps(msg))
+                    await ws.send(json.dumps({
+                        "type": "subscribe",
+                        "assets_ids": all_tokens,
+                        "channel": "book",
+                    }))
 
                     async for raw in ws:
+                        if self.debug and self._debug_count < 5:
+                            self._debug_count += 1
+                            try:
+                                parsed = json.loads(raw)
+                                preview = json.dumps(parsed, indent=2)[:600]
+                            except Exception:
+                                preview = raw[:600]
+                            print(f"\n[DEBUG raw #{self._debug_count}]\n{preview}\n")
+
                         try:
                             data = json.loads(raw)
                         except Exception:
@@ -207,16 +262,12 @@ class Ticker:
 
                         events = data if isinstance(data, list) else [data]
                         for ev in events:
-                            if not isinstance(ev, dict):
-                                continue
-                            etype = ev.get("event_type") or ev.get("type") or ""
-                            if etype in ("book", "book_snapshot", "l2_book", "price_change"):
-                                self._handle_book(ev)
+                            self._handle_event(ev)
 
             except websockets.exceptions.ConnectionClosed as e:
-                print(f"\n[reconnect] connection closed: {e}. Retrying in {backoff}s...")
+                print(f"\n[reconnect] closed: {e}. Retry in {backoff}s...")
             except Exception as e:
-                print(f"\n[reconnect] error: {e}. Retrying in {backoff}s...")
+                print(f"\n[reconnect] error: {e}. Retry in {backoff}s...")
 
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
@@ -227,21 +278,23 @@ class Ticker:
 # ---------------------------------------------------------------------------
 
 async def main(args):
-    print("Fetching active BTC markets from Gamma API...")
-    markets = fetch_btc_markets(tag_slug=args.tag, limit=args.limit)
+    print("Fetching live BTC markets from Gamma API...")
+    markets = fetch_btc_markets(limit=args.limit)
 
     if not markets:
-        print("No BTC markets found. Try running market_discovery.py first.")
+        print("No active BTC markets found.")
         sys.exit(1)
 
-    print(f"Found {len(markets)} BTC markets:")
-    for m in markets:
-        target = f"${m['btc_to_beat']:,.0f}" if m['btc_to_beat'] else "?"
-        print(f"  {target:>10}  {m['question'][:70]}")
+    print(f"Found {len(markets)} markets:")
+    for m in markets[:20]:
+        tgt = f"${m['btc_target']:,.0f}" if m["btc_target"] else "  ?"
+        print(f"  {tgt:>10}  {m['question'][:70]}")
+    if len(markets) > 20:
+        print(f"  ... and {len(markets)-20} more")
     print()
 
     spot = SpotTracker(interval=args.spot_interval)
-    ticker = Ticker(markets, spot)
+    ticker = Ticker(markets, spot, debug=args.debug)
 
     spot_task   = asyncio.create_task(spot.run())
     listen_task = asyncio.create_task(ticker.listen())
@@ -257,9 +310,12 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Polymarket BTC live ticker")
-    parser.add_argument("--tag",           default="crypto", help="Gamma API tag slug")
-    parser.add_argument("--limit",         type=int, default=50, help="Max events to fetch")
-    parser.add_argument("--spot-interval", type=float, default=5.0, help="Binance poll interval (s)")
+    parser.add_argument("--limit", type=int, default=200,
+                        help="Max events to fetch from Gamma API (default 200)")
+    parser.add_argument("--spot-interval", type=float, default=5.0,
+                        help="Binance BTC spot poll interval in seconds (default 5)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Print first 5 raw WS messages to diagnose format")
     args = parser.parse_args()
 
     try:

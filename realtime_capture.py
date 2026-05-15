@@ -826,13 +826,74 @@ def load_discovered_tokens(filepath: str = 'discovered_tokens.json') -> List[str
         return []
 
 
+def discover_btc_markets_live(limit: int = 200) -> tuple[List[str], List[dict]]:
+    """
+    Fetch live active BTC markets from Gamma API. Returns (token_ids, markets).
+    No file dependency — always reflects current Polymarket state.
+    Sorted by 24h volume so the most liquid markets come first.
+    """
+    import json as _json
+    try:
+        resp = requests.get(
+            f"{GAMMA_API_BASE}/events",
+            params={"active": "true", "closed": "false", "archived": "false",
+                    "order": "volume24hr", "ascending": "false", "limit": limit},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        events = resp.json()
+    except Exception as exc:
+        logger.error(f"Live BTC discovery failed: {exc}")
+        return [], []
+
+    token_ids: List[str] = []
+    markets: List[dict] = []
+
+    for event in events:
+        title = event.get("title", "")
+        if not any(k in title.lower() for k in ("bitcoin", "btc")):
+            continue
+
+        event_slug = event.get("slug", "")
+        for market in event.get("markets", []):
+            clob_ids = market.get("clobTokenIds", [])
+            if isinstance(clob_ids, str):
+                try:
+                    clob_ids = _json.loads(clob_ids)
+                except Exception:
+                    continue
+
+            outcomes = market.get("outcomes", [])
+            if isinstance(outcomes, str):
+                try:
+                    outcomes = _json.loads(outcomes)
+                except Exception:
+                    outcomes = []
+
+            if len(clob_ids) < 2:
+                continue
+
+            token_ids.extend(clob_ids)
+            markets.append({
+                "token_yes": clob_ids[0],
+                "token_no":  clob_ids[1],
+                "question":  market.get("question", ""),
+                "event_slug": event_slug,
+                "outcomes":  outcomes,
+                "end_date":  market.get("endDate", ""),
+            })
+
+    logger.info(f"Live discovery: {len(markets)} BTC markets, {len(token_ids)} tokens")
+    return token_ids, markets
+
+
 async def main():
     parser = argparse.ArgumentParser(description='Polymarket Real-Time Data Capture')
     parser.add_argument('--strategy', choices=['websocket', 'rest', 'hybrid'],
                        default='websocket', help='Capture strategy')
     parser.add_argument('--tokens', type=str, help='Comma-separated token IDs')
-    parser.add_argument('--token-file', type=str, default='discovered_tokens.json',
-                       help='File containing discovered tokens')
+    parser.add_argument('--token-file', type=str, default=None,
+                       help='File containing discovered tokens (default: live Gamma API discovery)')
     parser.add_argument('--interval', type=float, default=1.0,
                        help='REST polling interval in seconds')
     parser.add_argument('--limit', type=int, default=0,
@@ -851,14 +912,17 @@ async def main():
     # Initialize database
     db = DatabaseManager()
 
-    # Get tokens
+    # Get tokens — live discovery is the default
+    btc_markets: List[dict] = []
     if args.tokens:
         tokens = [t.strip() for t in args.tokens.split(',')]
-    else:
+    elif args.token_file:
         tokens = load_discovered_tokens(args.token_file)
+    else:
+        tokens, btc_markets = discover_btc_markets_live()
 
     if not tokens:
-        logger.error("No tokens specified. Use --tokens or ensure token file exists")
+        logger.error("No tokens found. Check network or pass --tokens / --token-file")
         return
 
     if args.limit > 0:
@@ -866,12 +930,17 @@ async def main():
 
     logger.info(f"Using {len(tokens)} tokens")
 
-    # Resolve spot assets (synchronous, runs before event loop tasks)
+    # Resolve spot assets from live markets or file
     spot_symbols: Set[str] = set()
     if not args.disable_spot:
         try:
-            from spot_asset_resolver import resolve_assets
-            token_to_symbol, spot_symbols = resolve_assets(args.token_file)
+            if btc_markets:
+                # Build symbol mapping from live market questions
+                from spot_asset_resolver import resolve_assets_from_markets
+                token_to_symbol, spot_symbols = resolve_assets_from_markets(btc_markets)
+            else:
+                from spot_asset_resolver import resolve_assets
+                token_to_symbol, spot_symbols = resolve_assets(args.token_file or 'discovered_tokens.json')
             db.save_market_assets(token_to_symbol)
         except Exception as exc:
             logger.error(f"Spot asset resolution failed (continuing without spot): {exc}")

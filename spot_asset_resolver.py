@@ -103,3 +103,25 @@ def resolve_assets(
         f" ({unmatched} unmatched, skipped)"
     )
     return token_to_symbol, symbols
+
+
+def resolve_assets_from_markets(markets: list) -> Tuple[Dict[str, str], Set[str]]:
+    """
+    Same as resolve_assets but accepts a list of market dicts directly (from live discovery).
+    Each dict must have 'token_yes', 'token_no', and 'question' keys.
+    """
+    token_to_symbol: Dict[str, str] = {}
+
+    for market in markets:
+        search_text = _build_search_text(market)
+        symbol = _match_symbol(search_text)
+        if symbol is None:
+            continue
+        for key in ("token_yes", "token_no"):
+            tok = market.get(key, "").strip()
+            if tok:
+                token_to_symbol[tok] = symbol
+
+    symbols: Set[str] = set(token_to_symbol.values())
+    logger.info(f"Resolved {len(token_to_symbol)} tokens from live markets → {sorted(symbols)}")
+    return token_to_symbol, symbols
